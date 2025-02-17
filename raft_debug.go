@@ -19,6 +19,7 @@ const (
 	dApplyLogEntries    LogTopic = "ApplyLogEntries"
 	dReplicateLog       LogTopic = "ReplicateLog()"
 	dPersist            LogTopic = "Persist"
+	dRPC                LogTopic = "RPC"
 )
 
 func Debug(debugStartTime time.Time, logTopic LogTopic, nodeIndex int, nodeRole string, format string, args ...interface{}) {

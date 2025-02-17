@@ -1,70 +1,31 @@
 package raft
 
-//
-// this is an outline of the API that raft must expose to
-// the service (or tester). see comments below for
-// each of these functions for more details.
-//
-// rf = Make(...)
-//   create a new Raft server.
-// rf.Start(command interface{}) (index, term, isleader)
-//   start agreement on a new log entry
-// rf.GetState() (term, isLeader)
-//   ask a Raft for its current term, and whether it thinks it is leader
-// ApplyMsg
-//   each time a new entry is committed to the log, each Raft peer
-//   should send an ApplyMsg to the service (or tester)
-//   in the same server.
-//
-
 import (
-	//	"bytes"
-
 	"bytes"
+	"encoding/gob"
 	"log"
 	"math"
 	"math/rand"
+	"net/rpc"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/anirudhsudhir/mit_dist_sys_labs/labgob"
-	"github.com/anirudhsudhir/mit_dist_sys_labs/labrpc"
 )
 
-// as each Raft peer becomes aware that successive log entries are
-// committed, the peer should send an ApplyMsg to the service (or
-// tester) on the same server, via the applyCh passed to Make(). set
-// CommandValid to true to indicate that the ApplyMsg contains a newly
-// committed log entry.
-//
-// in part 3D you'll want to send other kinds of messages (e.g.,
-// snapshots) on the applyCh, but set CommandValid to false for these
-// other uses.
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
 	CommandIndex int
-
-	// For 3D:
-	SnapshotValid bool
-	Snapshot      []byte
-	SnapshotTerm  int
-	SnapshotIndex int
 }
 
 // A Go object implementing a single Raft peer.
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
-	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
-
-	// Your data here (3A, 3B, 3C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
+	mu        sync.Mutex // Lock to protect shared access to this peer's state
+	peers     []string   // End points of all peers
+	persister *Persister // Object to hold this peer's persisted state
+	me        int        // this peer's index into peers[]
+	dead      int32      // set by Kill()
 
 	persistentState *PersistentState
 
@@ -94,25 +55,17 @@ type Raft struct {
 	debugStartTime time.Time
 }
 
-// example RequestVote RPC arguments structure.
-// field names must start with capital letters!
 type RequestVoteArgs struct {
-	// Your data here (3A, 3B).
 	Term         int
 	CandidateId  int
 	LastLogIndex int
 	LastLogTerm  int
 }
 
-// example RequestVote RPC reply structure.
-// field names must start with capital letters!
 type RequestVoteReply struct {
-	// Your data here (3A).
 	Term        int
 	VoteGranted bool
 }
-
-// Custom types and methods
 
 // me: to be persisted
 type PersistentState struct {
@@ -186,20 +139,9 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 // before you've implemented snapshots, you should pass nil as the
 // second argument to persister.Save().
-// after you've implemented snapshots, pass the current snapshot
-// (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (3C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
-
 	buf := new(bytes.Buffer)
-	enc := labgob.NewEncoder(buf)
+	enc := gob.NewEncoder(buf)
 	enc.Encode(rf.persistentState)
 	rf.persister.Save(buf.Bytes(), nil)
 }
@@ -213,36 +155,14 @@ func (rf *Raft) readPersist(data []byte) {
 
 		return
 	}
-	// Your code here (3C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
 
-	dec := labgob.NewDecoder(bytes.NewBuffer(data))
+	dec := gob.NewDecoder(bytes.NewBuffer(data))
 	if err := dec.Decode(&rf.persistentState); err != nil {
 		Debug(rf.debugStartTime, dPersist, rf.me, GetCurrentRole(rf.currentRole), "Failed to decode persistent state from disk -> %v", err)
 	}
 }
 
-// the service says it has created a snapshot that has
-// all info up to and including index. this means the
-// service no longer needs the log through (and including)
-// that index. Raft should now trim its log as much as possible.
-func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (3D).
-}
-
-func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (3A, 3B).
+func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -282,38 +202,33 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.Term = rf.persistentState.CurrentTerm
 		}
 	}
+
+	return nil
 }
 
-// example code to send a RequestVote RPC to a server.
-// server is the index of the target server in rf.peers[].
-// expects RPC arguments in args.
-// fills in *reply with RPC reply, so caller should
-// pass &reply.
-// the types of the args and reply passed to Call() must be
-// the same as the types of the arguments declared in the
-// handler function (including whether they are pointers).
-//
-// The labrpc package simulates a lossy network, in which servers
-// may be unreachable, and in which requests and replies may be lost.
-// Call() sends a request and waits for a reply. If a reply arrives
-// within a timeout interval, Call() returns true; otherwise
-// Call() returns false. Thus Call() may not return for a while.
-// A false return can be caused by a dead server, a live server that
-// can't be reached, a lost request, or a lost reply.
-//
-// Call() is guaranteed to return (perhaps after a delay) *except* if the
-// handler function on the server side does not return.  Thus there
-// is no need to implement your own timeouts around Call().
-//
-// look at the comments in ../labrpc/labrpc.go for more details.
-//
 // if you're having trouble getting RPC to work, check that you've
-// capitalized all field names in structs passed over RPC, and
-// that the caller passes the address of the reply struct with &, not
-// the struct itself.
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
+// capitalized all field names in structs passed over RPC
+func (rf *Raft) sendRequestVote(server int, args RequestVoteArgs, reply *RequestVoteReply) bool {
+	rf.mu.Lock()
+	serverAddr := rf.peers[server]
+	rf.mu.Unlock()
+
+	client, err := rpc.Dial("tcp", serverAddr)
+	if err != nil {
+		rf.mu.Lock()
+		Debug(rf.debugStartTime, dRPC, rf.me, GetCurrentRole(rf.currentRole), "Error dialing server while performing RPC -> %+v", err)
+		rf.mu.Unlock()
+		return false
+	}
+
+	if err := client.Call("Raft.RequestVote", args, reply); err != nil {
+		rf.mu.Lock()
+		Debug(rf.debugStartTime, dRPC, rf.me, GetCurrentRole(rf.currentRole), "RequestVote RPC to server %d failed -> %+v", server, err)
+		rf.mu.Unlock()
+		return false
+	}
+
+	return true
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -333,7 +248,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term := -1
 	isLeader := false
 
-	// Your code here (3B).
 	rf.mu.Lock()
 
 	if rf.currentRole == Leader {
@@ -391,7 +305,6 @@ func (rf *Raft) killed() bool {
 func (rf *Raft) ticker() {
 	for !rf.killed() {
 
-		// Your code here (3A)
 		// Check if a leader election should be started.
 
 		// me: handles the entirety of leader election
@@ -417,7 +330,7 @@ func (rf *Raft) ticker() {
 			rf.mu.Unlock()
 		}
 
-		var args *RequestVoteArgs
+		var args RequestVoteArgs
 		continueElection := false
 
 		rf.mu.Lock()
@@ -432,7 +345,7 @@ func (rf *Raft) ticker() {
 
 			rf.persist()
 
-			args = &RequestVoteArgs{
+			args = RequestVoteArgs{
 				Term:        rf.persistentState.CurrentTerm,
 				CandidateId: rf.me,
 			}
@@ -480,7 +393,7 @@ func (rf *Raft) ticker() {
 	}
 }
 
-// the service or tester wants to create a Raft server. the ports
+// the service or tester wants to create a Raft server. the endpoints
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
 // have the same order. persister is a place for this server to
@@ -489,7 +402,7 @@ func (rf *Raft) ticker() {
 // tester or service expects Raft to send ApplyMsg messages.
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
-func Make(peers []*labrpc.ClientEnd, me int,
+func Make(peers []string, me int,
 	persister *Persister, applyCh chan ApplyMsg,
 ) *Raft {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
@@ -500,7 +413,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	// Your initialization code here (3A, 3B, 3C).
 	rf.currentRole = Follower
 	rf.currentLeader = -1
 	rf.applyChChan = &applyCh
@@ -521,7 +433,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 }
 
 // me: sends a vote request to a particular node and processes the response
-func (rf *Raft) PerformVoteRequest(targetPeerIndex int, args *RequestVoteArgs) {
+func (rf *Raft) PerformVoteRequest(targetPeerIndex int, args RequestVoteArgs) error {
 	var reply RequestVoteReply
 	receivedReply := rf.sendRequestVote(targetPeerIndex, args, &reply)
 
@@ -529,7 +441,7 @@ func (rf *Raft) PerformVoteRequest(targetPeerIndex int, args *RequestVoteArgs) {
 
 	if rf.currentRole == Follower || rf.currentRole == Leader || !receivedReply {
 		rf.mu.Unlock()
-		return
+		return nil
 	}
 
 	if reply.Term == rf.persistentState.CurrentTerm && reply.VoteGranted {
@@ -567,10 +479,11 @@ func (rf *Raft) PerformVoteRequest(targetPeerIndex int, args *RequestVoteArgs) {
 	} else if reply.Term > rf.persistentState.CurrentTerm {
 		rf.mu.Unlock()
 		rf.transitionToHigherTerm(reply.Term)
-		return
+		return nil
 	}
 
 	rf.mu.Unlock()
+	return nil
 }
 
 // me: sends heartbeats at random intervals during idle
@@ -617,7 +530,7 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 	rf.checkAndUpdateCommitIndex()
 	rf.mu.Lock()
 
-	args := &AppendEntriesArgs{
+	args := AppendEntriesArgs{
 		Term:         rf.persistentState.CurrentTerm,
 		LeaderId:     leaderPeerIndex,
 		LeaderCommit: rf.commitIndex,
@@ -642,53 +555,65 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 	}
 
 	Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Sending AppendEntriesRPC to node %d with PrevLogIndex = %d, PrevLogTerm = %d, logs = %+v", followerPeerIndex, args.PrevLogIndex, args.PrevLogTerm, rf.persistentState.Log)
+	serverAddr := rf.peers[followerPeerIndex]
 	rf.mu.Unlock()
 
-	receivedReply := rf.peers[followerPeerIndex].Call("Raft.AppendEntries", args, &reply)
-
-	if receivedReply {
+	client, err := rpc.Dial("tcp", serverAddr)
+	if err != nil {
 		rf.mu.Lock()
-		if rf.persistentState.CurrentTerm == reply.Term {
-
-			// processing response only if it is a valid reply to an RPC sent in the current term
-			if rf.persistentState.CurrentTerm == args.Term && rf.currentRole == Leader {
-
-				if reply.Success {
-
-					if len(args.Entries) > 0 {
-						rf.matchIndex[followerPeerIndex] = args.PrevLogIndex + len(args.Entries)
-						rf.nextIndex[followerPeerIndex] = args.PrevLogIndex + len(args.Entries) + 1
-					}
-
-					Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Successful AppendEntriesRPC to node %d, nextIndex of nodes = %+v", followerPeerIndex, rf.nextIndex)
-
-					rf.mu.Unlock()
-					rf.checkAndUpdateCommitIndex()
-
-					return
-				} else if rf.nextIndex[followerPeerIndex] > 0 {
-					rf.nextIndex[followerPeerIndex] -= 1
-
-					rf.mu.Unlock()
-					rf.replicateLog(leaderPeerIndex, followerPeerIndex)
-
-					return
-				}
-			} // end of if rf.persistentState.currentTerm == args.Term
-
-		} else if rf.persistentState.CurrentTerm < reply.Term {
-			rf.mu.Unlock()
-			rf.transitionToHigherTerm(reply.Term)
-
-			return
-		}
-
+		Debug(rf.debugStartTime, dRPC, rf.me, GetCurrentRole(rf.currentRole), "Error dialing server while performing RPC -> %+v", err)
 		rf.mu.Unlock()
+		return
 	}
+
+	if err := client.Call("Raft.AppendEntries", args, &reply); err != nil {
+		rf.mu.Lock()
+		Debug(rf.debugStartTime, dRPC, rf.me, GetCurrentRole(rf.currentRole), "AppendEntries RPC to server %d failed -> %+v", followerPeerIndex, err)
+		rf.mu.Unlock()
+		return
+	}
+
+	rf.mu.Lock()
+	if rf.persistentState.CurrentTerm == reply.Term {
+
+		// processing response only if it is a valid reply to an RPC sent in the current term
+		if rf.persistentState.CurrentTerm == args.Term && rf.currentRole == Leader {
+
+			if reply.Success {
+
+				if len(args.Entries) > 0 {
+					rf.matchIndex[followerPeerIndex] = args.PrevLogIndex + len(args.Entries)
+					rf.nextIndex[followerPeerIndex] = args.PrevLogIndex + len(args.Entries) + 1
+				}
+
+				Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Successful AppendEntriesRPC to node %d, nextIndex of nodes = %+v", followerPeerIndex, rf.nextIndex)
+
+				rf.mu.Unlock()
+				rf.checkAndUpdateCommitIndex()
+
+				return
+			} else if rf.nextIndex[followerPeerIndex] > 0 {
+				rf.nextIndex[followerPeerIndex] -= 1
+
+				rf.mu.Unlock()
+				rf.replicateLog(leaderPeerIndex, followerPeerIndex)
+
+				return
+			}
+		} // end of if rf.persistentState.currentTerm == args.Term
+
+	} else if rf.persistentState.CurrentTerm < reply.Term {
+		rf.mu.Unlock()
+		rf.transitionToHigherTerm(reply.Term)
+
+		return
+	}
+
+	rf.mu.Unlock()
 }
 
 // me: handles an AppendEntries RPC
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) error {
 
 	rf.mu.Lock()
 	Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Received AppendEntriesRPC from node = %d, with prevLogIndex = %d and PrevLogTerm = %d", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm)
@@ -713,7 +638,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.receivedHeartbeatOrVoteGrant = false
 
 		rf.mu.Unlock()
-		return
+		return nil
 
 	} else if args.Term == rf.persistentState.CurrentTerm {
 		rf.currentRole = Follower
@@ -756,7 +681,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				rf.mu.Unlock()
 
 				reply.Success = false
-				return
+				return nil
 			}
 		}
 
@@ -805,7 +730,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 					Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Appending entries to log, old index = %d, new index = %d", lastLogIndex, len(rf.persistentState.Log)-1)
 				}
 			} else {
-				// lastLogIndex == args.PrevLogIndex
 
 				if lastLogIndex == 0 {
 					rf.persistentState.Log = append(rf.persistentState.Log, LogEntry{})
@@ -835,6 +759,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "AppendEntriesRPC handled from node = %d, with prevLogIndex = %d and PrevLogTerm = %d, logs = %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, rf.persistentState.Log)
 	rf.mu.Unlock()
+
+	return nil
 }
 
 // me: This function appends an entry to the leader's log and broadcasts it to all nodes
@@ -852,8 +778,6 @@ func (rf *Raft) checkAndUpdateCommitIndex() {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	// Debug(rf.debugStartTime, dCommitIndex, rf.me, GetCurrentRole(rf.currentRole), "Starting check to update commit index")
 
 	// me: checking if entry has been applied to quorum
 	//
@@ -877,8 +801,6 @@ func (rf *Raft) checkAndUpdateCommitIndex() {
 				N = i
 			}
 		}
-
-		// Debug(rf.debugStartTime, dCommitIndex, rf.me, GetCurrentRole(rf.currentRole), "Results of check to update commit index, N = %d, quorumNodes = %d", N, quorumNodes)
 
 		if N != -1 && N > rf.commitIndex {
 			if rf.persistentState.Log[N].Term == rf.persistentState.CurrentTerm {
