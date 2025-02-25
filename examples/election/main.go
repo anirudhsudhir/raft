@@ -3,9 +3,8 @@ package main
 import (
 	"encoding/json"
 	"log"
-	"net"
-	"net/rpc"
 	"os"
+	"sync"
 
 	"github.com/anirudhsudhir/raft"
 )
@@ -30,14 +29,17 @@ func main() {
 	log.Printf("Parsed config -> %+v\n", config)
 
 	applyCh := make(chan raft.ApplyMsg)
-	raftObj := raft.Make(config.NodeAddr, config.NodeIndex, raft.MakePersister(), applyCh)
+	_ = raft.Make(config.NodeAddr, config.NodeIndex, raft.MakePersister(), applyCh, config.CurrentNodePort)
 
-	go func() {
+	func() {
 		for range applyCh {
 		}
 	}()
 
-	config.initRPCHandlers(raftObj)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	wg.Wait()
+	// config.initRPCHandlers(raftObj)
 }
 
 func parseConfig(configFile string) *Config {
@@ -55,25 +57,25 @@ func parseConfig(configFile string) *Config {
 	return config
 }
 
-func (c *Config) initRPCHandlers(raftObj *raft.Raft) {
-	log.Println("Starting to init RPC handlers")
-
-	if err := rpc.Register(raftObj); err != nil {
-		log.Fatalf("Failed to register RPC Service -> %v\n", err)
-	}
-
-	listener, err := net.Listen("tcp", ":"+c.CurrentNodePort)
-	if err != nil {
-		log.Fatalf("Failed to start RPC server listener -> %v\n", err)
-	}
-	defer listener.Close()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Fatalf("Error while listening to RPC requests -> %v\n", err)
-		}
-
-		go rpc.ServeConn(conn)
-	}
-}
+// func (c *Config) initRPCHandlers(raftObj *raft.Raft) {
+// 	log.Println("Starting to init RPC handlers")
+//
+// 	if err := rpc.Register(raftObj); err != nil {
+// 		log.Fatalf("Failed to register RPC Service -> %v\n", err)
+// 	}
+//
+// 	listener, err := net.Listen("tcp", ":"+c.CurrentNodePort)
+// 	if err != nil {
+// 		log.Fatalf("Failed to start RPC server listener -> %v\n", err)
+// 	}
+// 	defer listener.Close()
+//
+// 	for {
+// 		conn, err := listener.Accept()
+// 		if err != nil {
+// 			log.Fatalf("Error while listening to RPC requests -> %v\n", err)
+// 		}
+//
+// 		go rpc.ServeConn(conn)
+// 	}
+// }

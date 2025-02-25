@@ -4,16 +4,11 @@ import (
 	"crypto/rand"
 	"math/big"
 	"net/rpc"
-	"time"
 )
 
 type Clerk struct {
-	servers []string
-
-	// me:
+	servers              []string
 	currentAssumedLeader int
-
-	debugStartTime time.Time
 }
 
 func nrand() int64 {
@@ -28,7 +23,6 @@ func MakeClerk(servers []string) *Clerk {
 	ck.servers = servers
 
 	ck.currentAssumedLeader = -1
-	ck.debugStartTime = time.Now()
 
 	return ck
 }
@@ -50,20 +44,21 @@ func (ck *Clerk) Get(key string) string {
 	reply := GetReply{}
 
 	if ck.currentAssumedLeader != -1 {
-		DebugClerk(ck.debugStartTime, dGetKeyClerk, "Sending a Get RPC to Node = %d, args = %+v", ck.currentAssumedLeader, args)
+		DebugClerk(dGetKeyClerk, "Sending a Get RPC to Node = %d, args = %+v", ck.currentAssumedLeader, args)
 
 		serverAddr := ck.servers[ck.currentAssumedLeader]
 		client, err := rpc.Dial("tcp", serverAddr)
 		if err != nil {
-			DebugClerk(ck.debugStartTime, dRPC, "Error while dialing key-value cluster, server = %s -> %+v", serverAddr, err)
+			DebugClerk(dRPC, "Error while dialing key-value cluster, server = %s -> %+v", serverAddr, err)
 		} else {
 			err := client.Call("KVServer.Get", args, &reply)
 			if err != nil {
-				DebugClerk(ck.debugStartTime, dRPC, "Get RPC to server %s failed -> %+v", serverAddr, err)
+				DebugClerk(dRPC, "Get RPC to server %s failed -> %+v", serverAddr, err)
 			} else {
-				DebugClerk(ck.debugStartTime, dGetKeyClerk, "Get RPC successful, LeaderIndex = %d, args = %+v", ck.currentAssumedLeader, args)
-				return reply.Value
-
+				if reply.Err == OK || reply.Err == ErrNoKey {
+					DebugClerk(dGetKeyClerk, "Get RPC successful, KVNode-LeaderIndex = %d, args = %+v, reply = %+v", ck.currentAssumedLeader, args, reply)
+					return reply.Value
+				}
 			}
 		}
 	}
@@ -71,27 +66,29 @@ func (ck *Clerk) Get(key string) string {
 	// me: send RPCs to all nodes until successful if no current assumed leader or RPC fails
 	for {
 		for i, server := range ck.servers {
-			DebugClerk(ck.debugStartTime, dGetKeyClerk, "Sending a Get RPC to Node = %d, args = %+v", i, args)
+			DebugClerk(dGetKeyClerk, "Sending a Get RPC to Node = %d, args = %+v", i, args)
 
 			client, err := rpc.Dial("tcp", server)
 			if err != nil {
-				DebugClerk(ck.debugStartTime, dRPC, "Error while dialing key-value cluster, server = %s -> %+v", server, err)
+				DebugClerk(dRPC, "Error while dialing key-value cluster, server = %s -> %+v", server, err)
 				continue
 			} else {
 				err := client.Call("KVServer.Get", args, &reply)
 				if err != nil {
-					DebugClerk(ck.debugStartTime, dRPC, "Get RPC to server %s failed -> %+v", server, err)
+					DebugClerk(dRPC, "Get RPC to server %s failed -> %+v", server, err)
 					continue
 				} else {
-					ck.currentAssumedLeader = i
-					DebugClerk(ck.debugStartTime, dGetKeyClerk, "Get RPC successful, LeaderIndex = %d, args = %+v", ck.currentAssumedLeader, args)
-					return reply.Value
+					if reply.Err == OK || reply.Err == ErrNoKey {
+						ck.currentAssumedLeader = i
+						DebugClerk(dGetKeyClerk, "Get RPC successful, KVNode-LeaderIndex = %d, args = %+v, reply = %+v", ck.currentAssumedLeader, args, reply)
+						return reply.Value
+					}
 				}
 			}
 		}
 	}
 
-	// DebugClerk(ck.debugStartTime, dGetKeyClerk, "Get RPC failed, Args = %+v, Reply = %+v", args, reply)
+	// DebugClerk(dGetKeyClerk, "Get RPC failed, Args = %+v, Reply = %+v", args, reply)
 }
 
 // shared by Put and Append.
@@ -114,20 +111,21 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	case "Put":
 
 		if ck.currentAssumedLeader != -1 {
-			DebugClerk(ck.debugStartTime, dPutKeyClerk, "Sending a Put RPC to Node = %d, args = %+v", ck.currentAssumedLeader, args)
+			DebugClerk(dPutKeyClerk, "Sending a Put RPC to Node = %d, args = %+v", ck.currentAssumedLeader, args)
 
 			serverAddr := ck.servers[ck.currentAssumedLeader]
 			client, err := rpc.Dial("tcp", serverAddr)
 			if err != nil {
-				DebugClerk(ck.debugStartTime, dRPC, "Error while dialing key-value cluster, server = %s -> %+v", serverAddr, err)
+				DebugClerk(dRPC, "Error while dialing key-value cluster, server = %s -> %+v", serverAddr, err)
 			} else {
 				err := client.Call("KVServer.Put", args, &reply)
 				if err != nil {
-					DebugClerk(ck.debugStartTime, dRPC, "Put RPC to server %s failed -> %+v", serverAddr, err)
+					DebugClerk(dRPC, "Put RPC to server %s failed -> %+v", serverAddr, err)
 				} else {
-					DebugClerk(ck.debugStartTime, dPutKeyClerk, "Put RPC successful, LeaderIndex = %d, args = %+v", ck.currentAssumedLeader, args)
-					return
-
+					if reply.Err == OK {
+						DebugClerk(dPutKeyClerk, "Put RPC successful, KVNode-LeaderIndex = %d, args = %+v, reply = %+v", ck.currentAssumedLeader, args, reply)
+						return
+					}
 				}
 			}
 		}
@@ -135,45 +133,48 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		// me: send RPCs to all nodes until successful if no current assumed leader or RPC fails
 		for {
 			for i, server := range ck.servers {
-				DebugClerk(ck.debugStartTime, dPutKeyClerk, "Sending a Put RPC to Node = %d, args = %+v", i, args)
+				DebugClerk(dPutKeyClerk, "Sending a Put RPC to Node = %d, args = %+v", i, args)
 
 				client, err := rpc.Dial("tcp", server)
 				if err != nil {
-					DebugClerk(ck.debugStartTime, dRPC, "Error while dialing key-value cluster, server = %s -> %+v", server, err)
+					DebugClerk(dRPC, "Error while dialing key-value cluster, server = %s -> %+v", server, err)
 					continue
 				} else {
 					err := client.Call("KVServer.Put", args, &reply)
 					if err != nil {
-						DebugClerk(ck.debugStartTime, dRPC, "Put RPC to server %s failed -> %+v", server, err)
+						DebugClerk(dRPC, "Put RPC to server %s failed -> %+v", server, err)
 						continue
 					} else {
-						ck.currentAssumedLeader = i
-						DebugClerk(ck.debugStartTime, dPutKeyClerk, "Put RPC successful, LeaderIndex = %d, args = %+v", ck.currentAssumedLeader, args)
-						return
+						if reply.Err == OK {
+							ck.currentAssumedLeader = i
+							DebugClerk(dPutKeyClerk, "Put RPC successful, KVNode-LeaderIndex = %d, args = %+v, reply = %+v", ck.currentAssumedLeader, args, reply)
+							return
+						}
 					}
 				}
 			}
 		}
 
-		// DebugClerk(ck.debugStartTime, dPutKeyClerk, "Put RPC failed, Args = %+v, Reply = %+v", args, reply)
+		// DebugClerk(dPutKeyClerk, "Put RPC failed, Args = %+v, Reply = %+v", args, reply)
 
 	case "Append":
 
 		if ck.currentAssumedLeader != -1 {
-			DebugClerk(ck.debugStartTime, dAppendKeyClerk, "Sending a Append RPC to Node = %d, args = %+v", ck.currentAssumedLeader, args)
+			DebugClerk(dAppendKeyClerk, "Sending a Append RPC to Node = %d, args = %+v", ck.currentAssumedLeader, args)
 
 			serverAddr := ck.servers[ck.currentAssumedLeader]
 			client, err := rpc.Dial("tcp", serverAddr)
 			if err != nil {
-				DebugClerk(ck.debugStartTime, dRPC, "Error while dialing key-value cluster, server = %s -> %+v", serverAddr, err)
+				DebugClerk(dRPC, "Error while dialing key-value cluster, server = %s -> %+v", serverAddr, err)
 			} else {
 				err := client.Call("KVServer.Append", args, &reply)
 				if err != nil {
-					DebugClerk(ck.debugStartTime, dRPC, "Append RPC to server %s failed -> %+v", serverAddr, err)
+					DebugClerk(dRPC, "Append RPC to server %s failed -> %+v", serverAddr, err)
 				} else {
-					DebugClerk(ck.debugStartTime, dAppendKeyClerk, "Append RPC successful, LeaderIndex = %d, args = %+v", ck.currentAssumedLeader, args)
-					return
-
+					if reply.Err == OK {
+						DebugClerk(dAppendKeyClerk, "Append RPC successful, KVNode-LeaderIndex = %d, args = %+v, reply = %+v", ck.currentAssumedLeader, args, reply)
+						return
+					}
 				}
 			}
 		}
@@ -181,31 +182,33 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		// me: send RPCs to all nodes until successful if no current assumed leader or RPC fails
 		for {
 			for i, server := range ck.servers {
-				DebugClerk(ck.debugStartTime, dAppendKeyClerk, "Sending a Append RPC to Node = %d, args = %+v", i, args)
+				DebugClerk(dAppendKeyClerk, "Sending a Append RPC to Node = %d, args = %+v", i, args)
 
 				client, err := rpc.Dial("tcp", server)
 				if err != nil {
-					DebugClerk(ck.debugStartTime, dRPC, "Error while dialing key-value cluster, server = %s -> %+v", server, err)
+					DebugClerk(dRPC, "Error while dialing key-value cluster, server = %s -> %+v", server, err)
 					continue
 				} else {
 					err := client.Call("KVServer.Append", args, &reply)
 					if err != nil {
-						DebugClerk(ck.debugStartTime, dRPC, "Append RPC to server %s failed -> %+v", server, err)
+						DebugClerk(dRPC, "Append RPC to server %s failed -> %+v", server, err)
 						continue
 					} else {
-						ck.currentAssumedLeader = i
-						DebugClerk(ck.debugStartTime, dAppendKeyClerk, "Append RPC successful, LeaderIndex = %d, args = %+v", ck.currentAssumedLeader, args)
-						return
+						if reply.Err == OK {
+							ck.currentAssumedLeader = i
+							DebugClerk(dAppendKeyClerk, "Append RPC successful, KVNode-LeaderIndex = %d, args = %+v, reply = %+v", ck.currentAssumedLeader, args, reply)
+							return
+						}
 					}
 				}
 			}
 		}
 
-		// DebugClerk(ck.debugStartTime, dAppendKeyClerk, "Append RPC failed, Args = %+v, Reply = %+v", args, reply)
+		// DebugClerk(dAppendKeyClerk, "Append RPC failed, Args = %+v, Reply = %+v", args, reply)
 
 	default:
 
-		DebugClerk(ck.debugStartTime, dInvalidPutAppendOp, "Invalid Put/Append operation, args = %+v", args)
+		DebugClerk(dInvalidPutAppendOp, "Invalid Put/Append operation, args = %+v", args)
 	}
 }
 

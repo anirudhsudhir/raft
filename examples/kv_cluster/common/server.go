@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/gob"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,12 +65,11 @@ type stateMachineUpdateArgs struct {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(servers []string, me int, persister *raft.Persister, maxraftstate int) *KVServer {
-	// TODO: Persistence for both kv_cluster as well as Raft
-	// labgob.Register(Op{})
+func StartKVServer(raftAddr []string, raftNodeIndex int, persister *raft.Persister, maxraftstate int, raftNodePort string, kvAddr []string, kvNodeIndex int) *KVServer {
+	gob.Register(Op{})
 
 	kv := new(KVServer)
-	kv.me = me
+	kv.me = kvNodeIndex
 	kv.maxraftstate = maxraftstate
 
 	kv.kvStore = &sync.Map{}
@@ -82,7 +82,7 @@ func StartKVServer(servers []string, me int, persister *raft.Persister, maxrafts
 	kv.debugStartTime = time.Now()
 
 	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.rf = raft.Make(raftAddr, raftNodeIndex, persister, kv.applyCh, raftNodePort)
 
 	args := &stateMachineUpdateArgs{
 		applyCh:            kv.applyCh,
@@ -100,7 +100,7 @@ func StartKVServer(servers []string, me int, persister *raft.Persister, maxrafts
 	return kv
 }
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+func (kv *KVServer) Get(args GetArgs, reply *GetReply) error {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
@@ -126,7 +126,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Node is not leader")
 		reply.Value = ""
 		reply.Err = ErrWrongLeader
-		return
+		return nil
 	}
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Waiting for state machine update by Raft")
@@ -137,16 +137,17 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Value = ""
 		reply.Err = ErrNoKey
 		DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Replying to RPC with response = %+v", reply)
-		return
+		return nil
 	}
 
 	reply.Value = val.(string)
 	reply.Err = OK
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Replying to RPC with response = %+v", reply)
+	return nil
 }
 
-func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *KVServer) Put(args PutAppendArgs, reply *PutAppendReply) error {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
@@ -171,7 +172,7 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.notifyLogEntryBool.CompareAndSwap(true, false)
 		DebugNode(kv.debugStartTime, dPutKeyNode, kv.me, kv.KvNodeState(), "Node is not leader")
 		reply.Err = ErrWrongLeader
-		return
+		return nil
 	}
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Waiting for state machine update by Raft")
@@ -180,9 +181,10 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = OK
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Replying to RPC with response = %+v", reply)
+	return nil
 }
 
-func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
+func (kv *KVServer) Append(args PutAppendArgs, reply *PutAppendReply) error {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
@@ -207,7 +209,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 		kv.notifyLogEntryBool.CompareAndSwap(true, false)
 		DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Node is not leader")
 		reply.Err = ErrWrongLeader
-		return
+		return nil
 	}
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Waiting for state machine update by Raft")
@@ -216,6 +218,7 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	reply.Err = OK
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Replying to RPC with response = %+v", reply)
+	return nil
 }
 
 func applyStateMachineUpdates(args *stateMachineUpdateArgs) {

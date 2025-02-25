@@ -6,6 +6,7 @@ import (
 	"log"
 	"math"
 	"math/rand"
+	"net"
 	"net/rpc"
 	"slices"
 	"sync"
@@ -53,6 +54,7 @@ type Raft struct {
 	applyEntriesCondVar *sync.Cond
 
 	debugStartTime time.Time
+	nodePort       string
 }
 
 type RequestVoteArgs struct {
@@ -403,8 +405,7 @@ func (rf *Raft) ticker() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 func Make(peers []string, me int,
-	persister *Persister, applyCh chan ApplyMsg,
-) *Raft {
+	persister *Persister, applyCh chan ApplyMsg, nodePort string) *Raft {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 
 	rf := &Raft{}
@@ -419,8 +420,12 @@ func Make(peers []string, me int,
 
 	rf.applyEntriesCondVar = sync.NewCond(&rf.mu)
 
+	rf.nodePort = nodePort
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	rf.initRPCHandlers()
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
@@ -554,7 +559,7 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 		}
 	}
 
-	Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Sending AppendEntriesRPC to node %d with PrevLogIndex = %d, PrevLogTerm = %d, logs = %+v", followerPeerIndex, args.PrevLogIndex, args.PrevLogTerm, rf.persistentState.Log)
+	// Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Sending AppendEntriesRPC to node %d with PrevLogIndex = %d, PrevLogTerm = %d, logs = %+v", followerPeerIndex, args.PrevLogIndex, args.PrevLogTerm, rf.persistentState.Log)
 	serverAddr := rf.peers[followerPeerIndex]
 	rf.mu.Unlock()
 
@@ -586,7 +591,7 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 					rf.nextIndex[followerPeerIndex] = args.PrevLogIndex + len(args.Entries) + 1
 				}
 
-				Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Successful AppendEntriesRPC to node %d, nextIndex of nodes = %+v", followerPeerIndex, rf.nextIndex)
+				// Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Successful AppendEntriesRPC to node %d, nextIndex of nodes = %+v", followerPeerIndex, rf.nextIndex)
 
 				rf.mu.Unlock()
 				rf.checkAndUpdateCommitIndex()
@@ -616,7 +621,7 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) error {
 
 	rf.mu.Lock()
-	Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Received AppendEntriesRPC from node = %d, with prevLogIndex = %d and PrevLogTerm = %d", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm)
+	// Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Received AppendEntriesRPC from node = %d, with prevLogIndex = %d and PrevLogTerm = %d", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm)
 
 	reply.Term = args.Term
 	reply.Success = true
@@ -757,7 +762,7 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 		rf.applyEntriesCondVar.Signal()
 	}
 
-	Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "AppendEntriesRPC handled from node = %d, with prevLogIndex = %d and PrevLogTerm = %d, logs = %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, rf.persistentState.Log)
+	// Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "AppendEntriesRPC handled from node = %d, with prevLogIndex = %d and PrevLogTerm = %d, logs = %+v", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm, rf.persistentState.Log)
 	rf.mu.Unlock()
 
 	return nil
@@ -859,4 +864,29 @@ func (rf *Raft) transitionToHigherTerm(newTerm int) {
 	rf.currentRole = Follower
 	rf.currentLeader = -1
 	rf.votesReceived = rf.votesReceived[:0]
+}
+
+func (rf *Raft) initRPCHandlers() {
+	Debug(rf.debugStartTime, dRPC, rf.me, "None", "Starting to init RPC handlers")
+
+	if err := rpc.Register(rf); err != nil {
+		Debug(rf.debugStartTime, dRPC, rf.me, "None", "Failed to register RPC Service -> %v\n", err)
+	}
+
+	listener, err := net.Listen("tcp", ":"+rf.nodePort)
+	if err != nil {
+		Debug(rf.debugStartTime, dRPC, rf.me, "None", "Failed to start RPC server listener -> %v\n", err)
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				Debug(rf.debugStartTime, dRPC, rf.me, "None", "Error while listening to RPC requests -> %v\n", err)
+			}
+
+			go rpc.ServeConn(conn)
+		}
+		// defer listener.Close()
+	}()
 }

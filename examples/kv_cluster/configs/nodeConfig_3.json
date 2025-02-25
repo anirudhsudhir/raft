@@ -1,0 +1,8 @@
+{
+"raft_nodeAddrs": ["127.0.0.1:4001", "127.0.0.1:4002", "127.0.0.1:4003"],
+"raft_nodeIndex": 2,
+"raft_currentNodePort": "4003",
+"kv_nodeAddrs": ["127.0.0.1:5001", "127.0.0.1:5002", "127.0.0.1:5003"],
+"kv_nodeIndex": 2,
+"kv_currentNodePort": "5003"
+}
