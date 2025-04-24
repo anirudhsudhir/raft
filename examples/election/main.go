@@ -16,6 +16,8 @@ type Config struct {
 	NodeIndex int `json:"nodeIndex"`
 
 	CurrentNodePort string `json:"currentNodePort"`
+
+	PersistedStatePath string `json:"persistedStatePath"`
 }
 
 func main() {
@@ -29,7 +31,7 @@ func main() {
 	log.Printf("Parsed config -> %+v\n", config)
 
 	applyCh := make(chan raft.ApplyMsg)
-	_ = raft.Make(config.NodeAddr, config.NodeIndex, raft.MakePersister(), applyCh, config.CurrentNodePort)
+	_ = raft.Make(config.NodeAddr, config.NodeIndex, raft.MakePersister(), applyCh, config.CurrentNodePort, config.PersistedStatePath)
 
 	func() {
 		for range applyCh {
@@ -56,26 +58,3 @@ func parseConfig(configFile string) *Config {
 
 	return config
 }
-
-// func (c *Config) initRPCHandlers(raftObj *raft.Raft) {
-// 	log.Println("Starting to init RPC handlers")
-//
-// 	if err := rpc.Register(raftObj); err != nil {
-// 		log.Fatalf("Failed to register RPC Service -> %v\n", err)
-// 	}
-//
-// 	listener, err := net.Listen("tcp", ":"+c.CurrentNodePort)
-// 	if err != nil {
-// 		log.Fatalf("Failed to start RPC server listener -> %v\n", err)
-// 	}
-// 	defer listener.Close()
-//
-// 	for {
-// 		conn, err := listener.Accept()
-// 		if err != nil {
-// 			log.Fatalf("Error while listening to RPC requests -> %v\n", err)
-// 		}
-//
-// 		go rpc.ServeConn(conn)
-// 	}
-// }

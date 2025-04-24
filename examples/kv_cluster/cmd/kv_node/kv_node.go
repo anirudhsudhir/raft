@@ -6,18 +6,20 @@ import (
 	"net"
 	"net/rpc"
 	"os"
+	"path"
 
 	"github.com/anirudhsudhir/raft"
 	"github.com/anirudhsudhir/raft/examples/kv_cluster/common"
 )
 
 type Config struct {
-	RaftNodeAddr        []string `json:"raft_nodeAddrs"`
-	RaftNodeIndex       int      `json:"raft_nodeIndex"`
-	RaftCurrentNodePort string   `json:"raft_currentNodePort"`
-	KVNodeAddr          []string `json:"kv_nodeAddrs"`
-	KVNodeIndex         int      `json:"kv_nodeIndex"`
-	KVCurrentNodePort   string   `json:"kv_currentNodePort"`
+	RaftNodeAddr           []string `json:"raft_nodeAddrs"`
+	RaftNodeIndex          int      `json:"raft_nodeIndex"`
+	RaftCurrentNodePort    string   `json:"raft_currentNodePort"`
+	RaftPersistedStatePath string   `json:"raft_persistedStatePath"`
+	KVNodeAddr             []string `json:"kv_nodeAddrs"`
+	KVNodeIndex            int      `json:"kv_nodeIndex"`
+	KVCurrentNodePort      string   `json:"kv_currentNodePort"`
 }
 
 func main() {
@@ -30,8 +32,12 @@ func main() {
 	config := parseConfig(os.Args[1])
 	log.Printf("Parsed config -> %+v\n", config)
 
+	if err := os.MkdirAll(path.Dir(config.RaftPersistedStatePath), 0750); err != nil {
+		log.Fatalf("Failed to create directory to persist Raft state -> %+v", err)
+	}
+
 	raftPersister := raft.MakePersister()
-	kvServer := common.StartKVServer(config.RaftNodeAddr, config.RaftNodeIndex, raftPersister, 0, config.RaftCurrentNodePort, config.KVNodeAddr, config.KVNodeIndex)
+	kvServer := common.StartKVServer(config.RaftNodeAddr, config.RaftNodeIndex, raftPersister, 0, config.RaftCurrentNodePort, config.RaftPersistedStatePath, config.KVNodeAddr, config.KVNodeIndex)
 	config.initRPCHandlers(kvServer)
 }
 
