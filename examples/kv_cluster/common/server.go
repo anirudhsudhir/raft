@@ -1,28 +1,13 @@
 package common
 
 import (
-	"encoding/gob"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/anirudhsudhir/raft"
+	"github.com/anirudhsudhir/raft/raft_cmd_types"
 )
-
-type OpCommand string
-
-const (
-	PutKey    OpCommand = "PutKey"
-	AppendKey OpCommand = "AppendKey"
-	GetKey    OpCommand = "GetKey"
-	DeleteKey OpCommand = "DeleteKey"
-)
-
-type Op struct {
-	Cmd   OpCommand
-	Key   string
-	Value string
-}
 
 type KVServer struct {
 	mu      sync.Mutex
@@ -65,9 +50,7 @@ type stateMachineUpdateArgs struct {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-func StartKVServer(raftAddr []string, raftNodeIndex int, persister *raft.Persister, maxraftstate int, raftNodePort string, kvAddr []string, kvNodeIndex int) *KVServer {
-	gob.Register(Op{})
-
+func StartKVServer(raftAddr []string, raftNodeIndex int, persister *raft.Persister, maxraftstate int, raftNodePort string, raftPersistedStatePath string, kvAddr []string, kvNodeIndex int) *KVServer {
 	kv := new(KVServer)
 	kv.me = kvNodeIndex
 	kv.maxraftstate = maxraftstate
@@ -82,7 +65,7 @@ func StartKVServer(raftAddr []string, raftNodeIndex int, persister *raft.Persist
 	kv.debugStartTime = time.Now()
 
 	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(raftAddr, raftNodeIndex, persister, kv.applyCh, raftNodePort)
+	kv.rf = raft.Make(raftAddr, raftNodeIndex, persister, kv.applyCh, raftNodePort, raftPersistedStatePath)
 
 	args := &stateMachineUpdateArgs{
 		applyCh:            kv.applyCh,
@@ -106,10 +89,10 @@ func (kv *KVServer) Get(args GetArgs, reply *GetReply) error {
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Received a Get Key RPC")
 
-	op := Op{
-		GetKey,
-		args.Key,
-		"",
+	op := raft_cmd_types.Op{
+		Cmd:   raft_cmd_types.GetKey,
+		Key:   args.Key,
+		Value: "",
 	}
 
 	if !kv.assumeLeaderExists.Load() {
@@ -153,10 +136,10 @@ func (kv *KVServer) Put(args PutAppendArgs, reply *PutAppendReply) error {
 
 	DebugNode(kv.debugStartTime, dPutKeyNode, kv.me, kv.KvNodeState(), "Received a Put Key RPC")
 
-	op := Op{
-		PutKey,
-		args.Key,
-		args.Value,
+	op := raft_cmd_types.Op{
+		Cmd:   raft_cmd_types.PutKey,
+		Key:   args.Key,
+		Value: args.Value,
 	}
 
 	if !kv.assumeLeaderExists.Load() {
@@ -190,10 +173,10 @@ func (kv *KVServer) Append(args PutAppendArgs, reply *PutAppendReply) error {
 
 	DebugNode(kv.debugStartTime, dGetKeyNode, kv.me, kv.KvNodeState(), "Received a Get Key RPC")
 
-	op := Op{
-		AppendKey,
-		args.Key,
-		args.Value,
+	op := raft_cmd_types.Op{
+		Cmd:   raft_cmd_types.AppendKey,
+		Key:   args.Key,
+		Value: args.Value,
 	}
 
 	if !kv.assumeLeaderExists.Load() {
@@ -227,13 +210,13 @@ func applyStateMachineUpdates(args *stateMachineUpdateArgs) {
 		args.assumeLeaderExists.CompareAndSwap(false, true)
 		DebugNode(args.debugStartTime, dApplyStateMachineUpdates, args.me, "Not filled", "Received log entry from raft = %+v", logEntry)
 
-		cmd := logEntry.Command.(Op)
+		cmd := logEntry.Command.(raft_cmd_types.Op)
 
 		switch cmd.Cmd {
-		case PutKey:
+		case raft_cmd_types.PutKey:
 			args.kvStore.Store(cmd.Key, cmd.Value)
 			DebugNode(args.debugStartTime, dApplyStateMachineUpdates, args.me, "Not filled", "Put Operation applied to State Machine")
-		case AppendKey:
+		case raft_cmd_types.AppendKey:
 			val, ok := args.kvStore.Load(cmd.Key)
 			newVal := cmd.Value
 			if ok {
@@ -241,10 +224,10 @@ func applyStateMachineUpdates(args *stateMachineUpdateArgs) {
 			}
 			args.kvStore.Store(cmd.Key, newVal)
 			DebugNode(args.debugStartTime, dApplyStateMachineUpdates, args.me, "Not filled", "Append Operation applied to State Machine")
-		case DeleteKey:
+		case raft_cmd_types.DeleteKey:
 			args.kvStore.Delete(cmd.Key)
 			DebugNode(args.debugStartTime, dApplyStateMachineUpdates, args.me, "Not filled", "Delete Operation applied to State Machine")
-		case GetKey:
+		case raft_cmd_types.GetKey:
 			// Nothing to be applied to state machine
 		}
 

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/anirudhsudhir/raft/raft_cmd_types"
 )
 
 type ApplyMsg struct {
@@ -52,6 +54,8 @@ type Raft struct {
 
 	// me: condition variable to indicate when entries must be applied to the state machine
 	applyEntriesCondVar *sync.Cond
+
+	persistedStatePath string
 
 	debugStartTime time.Time
 	nodePort       string
@@ -141,11 +145,23 @@ func (rf *Raft) GetState() (int, bool) {
 // see paper's Figure 2 for a description of what should be persistent.
 // before you've implemented snapshots, you should pass nil as the
 // second argument to persister.Save().
+//
+// me: caller holds rf.mu
 func (rf *Raft) persist() {
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
-	enc.Encode(rf.persistentState)
-	rf.persister.Save(buf.Bytes(), nil)
+
+	gob.Register(LogEntry{})
+	gob.Register(PersistentState{})
+
+	for _, typeToRegister := range raft_cmd_types.TypeRegistry {
+		gob.Register(typeToRegister)
+	}
+
+	if err := enc.Encode(rf.persistentState); err != nil {
+		log.Fatalf("failed to encode persistent state = %+v; \n err = %+v", rf.persistentState, err)
+	}
+	rf.persister.Save(buf.Bytes(), rf.persistedStatePath)
 }
 
 // restore previously persisted state.
@@ -158,10 +174,21 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 
+	rf.persistentState = new(PersistentState)
 	dec := gob.NewDecoder(bytes.NewBuffer(data))
-	if err := dec.Decode(&rf.persistentState); err != nil {
-		Debug(rf.debugStartTime, dPersist, rf.me, GetCurrentRole(rf.currentRole), "Failed to decode persistent state from disk -> %v", err)
+
+	gob.Register(LogEntry{})
+	gob.Register(PersistentState{})
+
+	for _, typeToRegister := range raft_cmd_types.TypeRegistry {
+		gob.Register(typeToRegister)
 	}
+
+	if err := dec.Decode(rf.persistentState); err != nil {
+		log.Fatalf("Failed to decode persistent state from disk -> %+v", err)
+	}
+
+	Debug(rf.debugStartTime, dPersist, rf.me, GetCurrentRole(rf.currentRole), "Decoded persistent state from disk -> %+v", rf.persistentState)
 }
 
 func (rf *Raft) RequestVote(args RequestVoteArgs, reply *RequestVoteReply) error {
@@ -405,7 +432,8 @@ func (rf *Raft) ticker() {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 func Make(peers []string, me int,
-	persister *Persister, applyCh chan ApplyMsg, nodePort string) *Raft {
+	persister *Persister, applyCh chan ApplyMsg, nodePort string, persistedStorePath string,
+) *Raft {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 
 	rf := &Raft{}
@@ -420,10 +448,12 @@ func Make(peers []string, me int,
 
 	rf.applyEntriesCondVar = sync.NewCond(&rf.mu)
 
+	rf.persistedStatePath = persistedStorePath
+
 	rf.nodePort = nodePort
 
 	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
+	rf.readPersist(persister.ReadRaftState(rf.persistedStatePath))
 
 	rf.initRPCHandlers()
 
@@ -580,10 +610,8 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 
 	rf.mu.Lock()
 	if rf.persistentState.CurrentTerm == reply.Term {
-
 		// processing response only if it is a valid reply to an RPC sent in the current term
 		if rf.persistentState.CurrentTerm == args.Term && rf.currentRole == Leader {
-
 			if reply.Success {
 
 				if len(args.Entries) > 0 {
@@ -606,7 +634,6 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 				return
 			}
 		} // end of if rf.persistentState.currentTerm == args.Term
-
 	} else if rf.persistentState.CurrentTerm < reply.Term {
 		rf.mu.Unlock()
 		rf.transitionToHigherTerm(reply.Term)
@@ -619,7 +646,6 @@ func (rf *Raft) replicateLog(leaderPeerIndex int, followerPeerIndex int) {
 
 // me: handles an AppendEntries RPC
 func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply) error {
-
 	rf.mu.Lock()
 	// Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "Received AppendEntriesRPC from node = %d, with prevLogIndex = %d and PrevLogTerm = %d", args.LeaderId, args.PrevLogIndex, args.PrevLogTerm)
 
@@ -666,13 +692,12 @@ func (rf *Raft) AppendEntries(args AppendEntriesArgs, reply *AppendEntriesReply)
 	// and nextIndex is decremented on leader, process continues until log lengths match
 	if lastLogIndex >= args.PrevLogIndex {
 		if args.PrevLogIndex > 0 {
-
 			// If an existing entry conflicts with a new one (same index
 			// but different terms),delete the existing entry and all that
 			// follow it (§5.3)
 			if rf.persistentState.Log[args.PrevLogIndex].Term != args.PrevLogTerm {
 				Debug(rf.debugStartTime, dAppendEntries, rf.me, GetCurrentRole(rf.currentRole), "tRUNCATING LOG AS TERMS DO NOT MATCH FROM LASTiNDEX = %d TO pREVlOGiNDEX - 1 = %d", lastLogIndex, args.PrevLogIndex-1)
-				rf.persistentState.Log = rf.persistentState.Log[:args.PrevLogIndex] //truncating log to 0-args.PrevLogIndex-1
+				rf.persistentState.Log = rf.persistentState.Log[:args.PrevLogIndex] // truncating log to 0-args.PrevLogIndex-1
 				if len(rf.persistentState.Log) == 1 {
 					rf.persistentState.Log = rf.persistentState.Log[:0]
 				}
@@ -780,7 +805,6 @@ func (rf *Raft) performLogBroadcast() {
 }
 
 func (rf *Raft) checkAndUpdateCommitIndex() {
-
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
@@ -821,7 +845,6 @@ func (rf *Raft) checkAndUpdateCommitIndex() {
 // me: This function commits log entries to the state machine
 // Using a condition variable to determine when entries must be applied
 func (rf *Raft) applyLogEntries() {
-
 	for !rf.killed() {
 		rf.mu.Lock()
 
@@ -839,7 +862,6 @@ func (rf *Raft) applyLogEntries() {
 				rf.lastApplied = i
 				Debug(rf.debugStartTime, dApplyLogEntries, rf.me, GetCurrentRole(rf.currentRole), "Applied log entry, commitIndex = %d, lastApplied = %d, command = %+v, logs = %+v", rf.commitIndex, rf.lastApplied, rf.persistentState.Log[i].Command, rf.persistentState.Log)
 			}
-
 		}
 
 		rf.mu.Unlock()

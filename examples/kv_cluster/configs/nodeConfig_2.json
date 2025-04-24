@@ -2,6 +2,7 @@
 "raft_nodeAddrs": ["127.0.0.1:4001", "127.0.0.1:4002", "127.0.0.1:4003"],
 "raft_nodeIndex": 1,
 "raft_currentNodePort": "4002",
+"raft_persistedStatePath": "persistedState/2.bin",
 "kv_nodeAddrs": ["127.0.0.1:5001", "127.0.0.1:5002", "127.0.0.1:5003"],
 "kv_nodeIndex": 1,
 "kv_currentNodePort": "5002"

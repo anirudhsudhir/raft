@@ -1,5 +1,6 @@
 kv_node
 clerk
+persistedState/
 
 !kv_node/
 !clerk/

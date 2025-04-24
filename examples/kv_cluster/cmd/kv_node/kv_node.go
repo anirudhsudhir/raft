@@ -12,12 +12,13 @@ import (
 )
 
 type Config struct {
-	RaftNodeAddr        []string `json:"raft_nodeAddrs"`
-	RaftNodeIndex       int      `json:"raft_nodeIndex"`
-	RaftCurrentNodePort string   `json:"raft_currentNodePort"`
-	KVNodeAddr          []string `json:"kv_nodeAddrs"`
-	KVNodeIndex         int      `json:"kv_nodeIndex"`
-	KVCurrentNodePort   string   `json:"kv_currentNodePort"`
+	RaftNodeAddr           []string `json:"raft_nodeAddrs"`
+	RaftNodeIndex          int      `json:"raft_nodeIndex"`
+	RaftCurrentNodePort    string   `json:"raft_currentNodePort"`
+	RaftPersistedStatePath string   `json:"raft_persistedStatePath"`
+	KVNodeAddr             []string `json:"kv_nodeAddrs"`
+	KVNodeIndex            int      `json:"kv_nodeIndex"`
+	KVCurrentNodePort      string   `json:"kv_currentNodePort"`
 }
 
 func main() {
@@ -31,7 +32,7 @@ func main() {
 	log.Printf("Parsed config -> %+v\n", config)
 
 	raftPersister := raft.MakePersister()
-	kvServer := common.StartKVServer(config.RaftNodeAddr, config.RaftNodeIndex, raftPersister, 0, config.RaftCurrentNodePort, config.KVNodeAddr, config.KVNodeIndex)
+	kvServer := common.StartKVServer(config.RaftNodeAddr, config.RaftNodeIndex, raftPersister, 0, config.RaftCurrentNodePort, config.RaftPersistedStatePath, config.KVNodeAddr, config.KVNodeIndex)
 	config.initRPCHandlers(kvServer)
 }
 

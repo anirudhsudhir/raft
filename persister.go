@@ -1,24 +1,21 @@
 package raft
 
-//
-// support for Raft and kvraft to save persistent
-// Raft state (log &c) and k/v server snapshots.
-//
-// we will use the original persister.go to test your code for grading.
-// so, while you can modify this code to help you debug, please
-// test with the original before submitting.
-//
-
-import "sync"
+import (
+	"io"
+	"log"
+	"os"
+	"path"
+	"sync"
+)
 
 type Persister struct {
 	mu        sync.Mutex
 	raftstate []byte
-	snapshot  []byte
 }
 
 func MakePersister() *Persister {
-	return &Persister{}
+	ps := new(Persister)
+	return ps
 }
 
 func clone(orig []byte) []byte {
@@ -27,18 +24,29 @@ func clone(orig []byte) []byte {
 	return x
 }
 
-func (ps *Persister) Copy() *Persister {
+func (ps *Persister) ReadRaftState(persistedStatePath string) []byte {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	np := MakePersister()
-	np.raftstate = ps.raftstate
-	np.snapshot = ps.snapshot
-	return np
-}
 
-func (ps *Persister) ReadRaftState() []byte {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
+	file, err := os.OpenFile(persistedStatePath, os.O_CREATE|os.O_RDONLY, 0666)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(path.Dir(persistedStatePath), 0750); err != nil {
+				log.Fatalf("Failed to create directory to persist Raft state -> %+v", err)
+			}
+			if file, err = os.Create(persistedStatePath); err != nil {
+				log.Fatalf("Failed to create file to persist Raft state -> %+v", err)
+			}
+
+		} else {
+			log.Fatalf("FAILED to open file to read Raft state from disk, path = %q, err = %+v", persistedStatePath, err)
+		}
+	}
+
+	ps.raftstate, err = io.ReadAll(file)
+	if err != nil {
+		log.Fatalf("FAILED to read Raft state from disk for persistence, path = %q, err = %+v", persistedStatePath, err)
+	}
 	return clone(ps.raftstate)
 }
 
@@ -48,23 +56,17 @@ func (ps *Persister) RaftStateSize() int {
 	return len(ps.raftstate)
 }
 
-// Save both Raft state and K/V snapshot as a single atomic action,
-// to help avoid them getting out of sync.
-func (ps *Persister) Save(raftstate []byte, snapshot []byte) {
+func (ps *Persister) Save(raftstate []byte, persistedStatePath string) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
 	ps.raftstate = clone(raftstate)
-	ps.snapshot = clone(snapshot)
-}
+	file, err := os.OpenFile(persistedStatePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		log.Fatalf("FAILED to open file to persist Raft state to disk, path = %q, err = %+v", persistedStatePath, err)
+	}
 
-func (ps *Persister) ReadSnapshot() []byte {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	return clone(ps.snapshot)
-}
-
-func (ps *Persister) SnapshotSize() int {
-	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	return len(ps.snapshot)
+	_, err = file.Write(ps.raftstate)
+	if err != nil {
+		log.Fatalf("FAILED to write Raft state to disk for persistence, path = %q, err = %+v", persistedStatePath, err)
+	}
 }
